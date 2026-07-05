@@ -11,6 +11,8 @@
 | OCR | `app/ocr.py` | 提取图片、扫描 PDF、DOCX 内图片中的文字 |
 | 分块 | `app/text_splitter.py` | 按中文标点和换行切分文档 |
 | 向量库 | `app/vector_store.py` | ChromaDB 增删查和统计 |
+| 混合检索 | `app/hybrid_retrieval.py` | 合并向量、关键词和轻量图谱召回并融合排序 |
+| 轻量图谱 | `app/light_graph.py` | 从 chunk 抽取实体、关键词和邻近关系，用于 LightRAG-lite 检索 |
 | 知识目录 | `app/knowledge_index.py` | 为文档生成结构化摘要和全局目录 |
 | 路由器 | `app/question_router.py` | 判断问题是否需要文档依据 |
 | RAG 编排 | `app/rag_chain.py` | 组织历史、路由、检索、生成、自检和来源 |
@@ -29,6 +31,7 @@ sequenceDiagram
     participant Splitter as Text Splitter
     participant Vector as ChromaDB
     participant Index as Knowledge Index
+    participant Graph as Light Graph
     participant LLM as Ollama
 
     User->>UI: 上传文档
@@ -42,6 +45,8 @@ sequenceDiagram
     UI->>LLM: summarize_document
     LLM-->>Index: 结构化摘要
     Index-->>UI: 更新 index.json 和文档摘要
+    UI->>Graph: build_graph_for_document
+    Graph-->>UI: 更新 data/light_graph/index.json
 ```
 
 ## 问答 Agent 状态流
@@ -55,7 +60,7 @@ stateDiagram-v2
     LoadHistory --> RouteQuestion: route_question
     RouteQuestion --> General: mode=general
     RouteQuestion --> MissingEvidence: mode=missing_evidence
-    RouteQuestion --> RetrieveDocs: mode=document/hybrid
+    RouteQuestion --> RetrieveDocs: mode=document/hybrid/naive/local/global/mix
     RetrieveDocs --> BuildPrompt: doc_context + summaries
     General --> BuildPrompt
     MissingEvidence --> BuildPrompt
@@ -74,6 +79,7 @@ stateDiagram-v2
 - `history`：最近 N 轮对话文本。
 - `route`：路由结果，包含 `mode`、`needs_documents`、`relevant_file_ids`。
 - `docs`：检索得到的文档片段。
+- `retrieval_debug`：检索调试信息，包含 query、mode、rank、score、methods。
 - `doc_context`：拼接后的检索上下文。
 - `doc_summaries`：相关文档摘要。
 - `answer`：模型生成并自检后的最终回答。
@@ -86,21 +92,24 @@ data/
 ├── uploads/             # 原始上传文件
 ├── chroma/              # ChromaDB 持久化向量索引
 ├── knowledge_index/     # index.json + 每个文档的 markdown 摘要
+├── light_graph/         # LightRAG-lite 轻量图谱 index.json
 └── conversations/       # 每个会话一个 JSON 文件
 ```
 
 ## 核心设计亮点
 
 - 本地优先：文档、向量、对话和模型调用均可在本机运行。
-- 双层知识组织：ChromaDB 负责片段检索，`knowledge_index` 负责文档级路由和摘要。
-- 可解释回答：回答返回 `sources`，便于在 UI 中展示出处。
+- 三路混合检索：ChromaDB 负责语义召回，关键词检索负责精确命中，轻量图谱负责实体和关系召回。
+- 双层知识组织：`knowledge_index` 负责文档级路由和摘要，`light_graph` 负责 LightRAG-lite 的实体/关系索引。
+- 可解释回答：回答返回 `sources`、`score` 和 `methods`，便于在 UI 中展示出处和检索依据。
 - 多端复用：Web、API、桌面端共用同一套入库和 RAG 函数。
 - OCR 增强：普通文本抽取之外，补充扫描件和图片资料处理能力。
 
 ## 后续重构方向
 
 - 把入库流程抽成 `IngestionService`，避免 UI/API/Desktop 重复调用底层函数。
+- 把检索流程抽成 `RetrievalService`，统一管理 `naive/local/global/mix` 的权重、候选数量和调试输出。
 - 把问答流程抽成显式 `AgentState`，让路由、检索、生成、自检更容易测试。
-- 为 ChromaDB、知识目录和上传文件加入一致性保护。
+- 为 ChromaDB、知识目录、轻量图谱和上传文件加入一致性保护。
 - 将 `HashEmbeddings` 限定为开发兜底，并在生产模式下显式报错。
-
+- 引入 reranker 和检索评测集，用 hit@k、MRR、引用完整率持续评估 RAG 效果。

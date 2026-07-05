@@ -5,6 +5,7 @@
 ## 推荐阅读入口
 
 - `README.md`：面向演示、部署和使用的主说明。
+- `docs/INTERVIEW_GUIDE.md`：面向面试准备的项目讲解、优点、痛点和优化方案。
 - `docs/ARCHITECTURE.md`：系统架构、RAG 流程和 Agent 状态流。
 - `docs/TESTING.md`：测试范围和运行方式。
 - `CODE.md`：历史交接文档，仅作为参考。
@@ -42,6 +43,8 @@ app/
 ├── text_splitter.py             # 分块
 ├── embedder.py                  # Embedding
 ├── vector_store.py              # 向量库
+├── hybrid_retrieval.py          # 向量、关键词、图谱混合检索
+├── light_graph.py               # 轻量图谱索引
 ├── knowledge_index.py           # 文档摘要目录
 ├── question_router.py           # 问题路由
 ├── rag_chain.py                 # RAG 问答编排
@@ -62,6 +65,5 @@ app/
 - 文档、架构图、截图放在 `docs/`。
 - 测试放在 `tests/`。
 - 新增演示截图统一放到 `docs/images/`，并在 README 中引用。
-- 运行数据放在 `data/`，不要把临时验证数据写入代码目录。
+- 运行数据放在 `data/`，包括 `uploads/`、`chroma/`、`knowledge_index/`、`light_graph/`、`conversations/`，不要把临时验证数据写入代码目录。
 - 临时生成物放在 `tmp/`，正式交付物放在 `output/`。
-

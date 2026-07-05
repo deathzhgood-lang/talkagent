@@ -14,6 +14,8 @@ python -m pytest -q
 - `question_router`：路由结果归一化规则。
 - `text_splitter`：中文分块和 `chunk_index` metadata。
 - `rag_chain` 辅助逻辑：回答标签归一化、来源展示规则、必选参数补全逻辑。
+- `hybrid_retrieval`：向量、关键词、图谱召回融合后的排序和 metadata 输出。
+- `light_graph`：轻量图谱构建、实体统计、图谱搜索和删除同步。
 
 ## 未覆盖范围
 
@@ -21,6 +23,7 @@ python -m pytest -q
 
 - Ollama 模型可用性和回答质量。
 - ChromaDB 真实向量检索质量。
+- 真实 reranker 或生产 embedding 模型的排序质量。
 - OCR 对扫描 PDF、图片、DOCX 内嵌图片的识别效果。
 - Gradio 和 Tk UI 的端到端交互。
 
@@ -30,5 +33,5 @@ python -m pytest -q
 2. 准备一份小型 Markdown 或 TXT 文档。
 3. 通过 Web UI 上传入库。
 4. 提问一个文档内明确存在的问题。
-5. 检查回答是否以 `【基于文档】` 开头，并且来源区域有命中文档片段。
-
+5. 在 Web UI 的 Retrieval Test 中用 `mix`、`naive`、`local`、`global` 对比召回片段。
+6. 检查回答是否以 `【基于文档】` 或 `【综合回答】` 开头，并且来源区域有命中文档片段、score 和 methods。
