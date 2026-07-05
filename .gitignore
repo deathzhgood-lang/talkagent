@@ -1,0 +1,43 @@
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# Python cache and test artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Virtual environments and local dependency drops
+.venv/
+venv/
+env/
+.deps/
+
+# Local model/cache directories
+models/
+.cache/
+
+# Runtime app data
+data/
+
+# Generated and temporary artifacts
+output/
+tmp/
+tmp_template.doc
+*.inspect.ndjson
+*.layout.json
+
+# Logs
+*.log
+
+# OS/editor files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
