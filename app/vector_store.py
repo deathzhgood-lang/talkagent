@@ -58,6 +58,19 @@ def similarity_search(query: str, k: int = 4, file_ids: list[str] | None = None)
     return store.similarity_search(query, k=k)
 
 
+def similarity_search_with_scores(
+    query: str,
+    k: int = 4,
+    file_ids: list[str] | None = None,
+) -> list[tuple[Document, float]]:
+    """Return vector search hits with Chroma distance scores."""
+    store = _get_store(with_embedding=True)
+    if file_ids:
+        where = {"file_id": file_ids[0]} if len(file_ids) == 1 else {"file_id": {"$in": file_ids}}
+        return store.similarity_search_with_score(query, k=k, filter=where)
+    return store.similarity_search_with_score(query, k=k)
+
+
 def get_all_files() -> List[dict]:
     """
     返回知识库中所有文件的列表（去重 + 统计每个文件的 chunk 数）。

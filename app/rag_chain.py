@@ -5,10 +5,10 @@ from urllib.error import HTTPError
 from app import chat_store
 from app.answer_checker import check_answer
 from app.config import CHAT_HISTORY_ROUNDS, RETRIEVAL_K
+from app.hybrid_retrieval import RetrievalResult, hybrid_search
 from app.knowledge_index import get_document_summaries
 from app.llm_client import generate_text
 from app.question_router import route_question
-from app.vector_store import similarity_search
 
 
 ANSWER_PROMPT = """你是一个可工作的 AI 客服助手。
@@ -43,36 +43,57 @@ def _format_sources(docs: list[Any]) -> list[dict[str, Any]]:
             {
                 "file_name": meta.get("file_name") or meta.get("source") or "未知文件",
                 "chunk_index": meta.get("chunk_index"),
+                "score": meta.get("retrieval_score"),
+                "methods": meta.get("retrieval_methods", []),
+                "vector_score": meta.get("vector_score"),
+                "keyword_score": meta.get("keyword_score"),
+                "graph_score": meta.get("graph_score"),
                 "snippet": text[:180],
             }
         )
     return sources
 
 
-def _retrieve_for_route(question: str, route: dict[str, Any]) -> list[Any]:
+def _retrieval_mode(route: dict[str, Any]) -> str:
+    mode = route.get("mode") or "mix"
+    if mode == "document":
+        return "naive"
+    if mode == "hybrid":
+        return "mix"
+    if mode in {"naive", "local", "global", "mix"}:
+        return mode
+    return "mix"
+
+
+def _retrieve_for_route(question: str, route: dict[str, Any]) -> RetrievalResult:
     if not route.get("needs_documents"):
-        return []
+        return RetrievalResult(docs=[], debug=[])
     file_ids = route.get("relevant_file_ids") or None
     queries = _expanded_queries(question)
     docs: list[Any] = []
+    debug: list[dict[str, Any]] = []
     seen: set[tuple[str, Any, str]] = set()
     k = max(RETRIEVAL_K, 10) if _is_enumeration_question(question) else RETRIEVAL_K
-    try:
-        for query in queries:
-            for doc in similarity_search(query, k=k, file_ids=file_ids):
-                meta = doc.metadata or {}
-                key = (
-                    meta.get("file_id", ""),
-                    meta.get("chunk_index", ""),
-                    doc.page_content[:80],
-                )
-                if key in seen:
-                    continue
-                seen.add(key)
-                docs.append(doc)
-        return docs[: max(k, RETRIEVAL_K)]
-    except Exception:
-        return similarity_search(question, k=k)
+    mode = _retrieval_mode(route)
+    for query in queries:
+        result = hybrid_search(query, k=k, file_ids=file_ids, mode=mode)
+        for item in result.debug:
+            item = dict(item)
+            item["query"] = query
+            item["mode"] = mode
+            debug.append(item)
+        for doc in result.docs:
+            meta = doc.metadata or {}
+            key = (
+                meta.get("file_id", ""),
+                meta.get("chunk_index", ""),
+                doc.page_content[:80],
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            docs.append(doc)
+    return RetrievalResult(docs=docs[: max(k, RETRIEVAL_K)], debug=debug)
 
 
 def _is_enumeration_question(question: str) -> bool:
@@ -114,7 +135,7 @@ def _normalize_answer_label(answer: str, route: dict[str, Any]) -> str:
     mode = route.get("mode")
     if mode == "general":
         label = "【通用回答】"
-    elif mode == "hybrid":
+    elif mode in {"hybrid", "mix", "global"}:
         label = "【综合回答】"
     elif mode == "missing_evidence":
         label = "【缺少依据】"
@@ -160,6 +181,10 @@ def _extract_required_items(docs: list[Any]) -> list[tuple[str, str]]:
 
 def _is_required_parameter_question(question: str) -> bool:
     q = question.lower()
+    if any(word in q for word in ("required", "must", "mandatory")) and any(
+        word in q for word in ("parameter", "parameters", "field", "fields", "api")
+    ):
+        return True
     return any(word in q for word in ("必选", "必填", "必须", "required")) and any(
         word in q for word in ("参数", "字段", "接口", "哪些", "哪几个")
     )
@@ -189,7 +214,8 @@ def _enforce_required_items(question: str, answer: str, route: dict[str, Any], d
 def answer_question(question: str, conversation_id: str | None = None) -> dict[str, Any]:
     history = chat_store.format_recent_history(conversation_id, CHAT_HISTORY_ROUNDS)
     route = route_question(question, history)
-    docs = _retrieve_for_route(question, route)
+    retrieval = _retrieve_for_route(question, route)
+    docs = retrieval.docs
     doc_context = _format_context(docs)
     doc_summaries = get_document_summaries(route.get("relevant_file_ids", []))
 
@@ -236,4 +262,5 @@ def answer_question(question: str, conversation_id: str | None = None) -> dict[s
         "sources": _sources_for_answer(answer, docs),
         "conversation_id": conversation_id,
         "route": route,
+        "retrieval_debug": retrieval.debug,
     }

@@ -4,7 +4,9 @@ from app.knowledge_index import get_directory_text
 from app.llm_client import extract_json_object, generate_text
 
 
-VALID_MODES = {"general", "document", "hybrid", "missing_evidence"}
+DOCUMENT_MODES = {"document", "hybrid", "naive", "local", "global", "mix"}
+STRICT_DOCUMENT_MODES = {"document", "hybrid", "local"}
+VALID_MODES = {"general", "missing_evidence", *DOCUMENT_MODES}
 
 
 def route_question(question: str, history: str = "") -> dict[str, Any]:
@@ -19,7 +21,7 @@ def route_question(question: str, history: str = "") -> dict[str, Any]:
 
 请输出严格 JSON：
 {{
-  "mode": "general|document|hybrid|missing_evidence",
+  "mode": "general|naive|local|global|mix|document|hybrid|missing_evidence",
   "needs_documents": true/false,
   "relevant_file_ids": ["..."],
   "reason": "一句话说明判断原因",
@@ -51,14 +53,14 @@ def _normalize_route(data: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(file_ids, list):
         file_ids = []
     file_ids = [str(item) for item in file_ids if item]
-    needs_documents = bool(data.get("needs_documents", mode in {"document", "hybrid"}))
+    needs_documents = bool(data.get("needs_documents", mode in DOCUMENT_MODES))
     if mode == "general":
         needs_documents = False
         file_ids = []
     if mode == "missing_evidence" and file_ids:
         mode = "document"
         needs_documents = True
-    if mode in {"document", "hybrid"} and not file_ids:
+    if mode in STRICT_DOCUMENT_MODES and not file_ids:
         mode = "missing_evidence"
         needs_documents = False
     return {
@@ -66,7 +68,7 @@ def _normalize_route(data: dict[str, Any]) -> dict[str, Any]:
         "needs_documents": needs_documents,
         "relevant_file_ids": file_ids,
         "reason": str(data.get("reason", "")),
-        "can_use_general_knowledge": bool(data.get("can_use_general_knowledge", mode in {"general", "hybrid"})),
+        "can_use_general_knowledge": bool(data.get("can_use_general_knowledge", mode in {"general", "hybrid", "global", "mix"})),
     }
 
 

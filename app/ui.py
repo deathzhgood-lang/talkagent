@@ -5,7 +5,9 @@ import gradio as gr
 
 from app import chat_store
 from app.document_loader import load_file_from_bytes
+from app.hybrid_retrieval import hybrid_search
 from app.knowledge_index import remove_document_from_index, summarize_document
+from app.light_graph import build_graph_for_document, remove_document_from_graph
 from app.rag_chain import answer_question
 from app.text_splitter import split_documents
 from app.vector_store import add_documents, delete_by_file, get_all_files, get_stats
@@ -43,9 +45,13 @@ def _format_sources(sources: list[dict[str, Any]] | None) -> str:
         return "暂无来源"
     lines = []
     for source in sources:
+        methods = ",".join(source.get("methods") or [])
+        score = source.get("score")
+        score_text = f" score={score}" if score is not None else ""
+        method_text = f" [{methods}]" if methods else ""
         lines.append(
             f"- {source.get('file_name', '未知文件')} / 片段 {source.get('chunk_index')}: "
-            f"{source.get('snippet', '')}"
+            f"{source.get('snippet', '')}{method_text}{score_text}"
         )
     return "\n".join(lines)
 
@@ -90,6 +96,26 @@ def refresh_documents():
     )
 
 
+def run_retrieval_test(query, mode):
+    query = (query or "").strip()
+    if not query:
+        return "Please enter a retrieval test query."
+    result = hybrid_search(query, k=8, mode=mode or "mix")
+    if not result.docs:
+        return "No chunks retrieved."
+    lines = []
+    for index, doc in enumerate(result.docs, start=1):
+        meta = doc.metadata or {}
+        methods = ",".join(meta.get("retrieval_methods") or [])
+        snippet = (doc.page_content or "").replace("\n", " ").strip()[:220]
+        lines.append(
+            f"{index}. {meta.get('file_name') or meta.get('source')} "
+            f"chunk={meta.get('chunk_index')} score={meta.get('retrieval_score')} "
+            f"methods={methods}\n{snippet}"
+        )
+    return "\n\n".join(lines)
+
+
 def upload_files(files):
     if not files:
         return (
@@ -107,7 +133,8 @@ def upload_files(files):
                 docs = load_file_from_bytes(f.read(), file_name)
             chunks = split_documents(docs)
             file_id = add_documents(chunks, file_name)
-            summarize_document(file_id, file_name, chunks)
+            summary = summarize_document(file_id, file_name, chunks)
+            build_graph_for_document(file_id, file_name, chunks, summary)
             messages.append(f"{file_name} 入库成功，片段数 {len(chunks)}，file_id={file_id}")
         except Exception as exc:
             messages.append(f"{file_name} 入库失败：{exc}")
@@ -131,6 +158,7 @@ def delete_file(file_id):
 
     deleted = delete_by_file(file_id)
     remove_document_from_index(file_id)
+    remove_document_from_graph(file_id)
     return (
         f"已删除 {deleted} 个片段。",
         _document_stats(),
@@ -238,6 +266,21 @@ def build_ui():
                 )
                 delete_file_btn = gr.Button("删除所选文档")
 
+                gr.Markdown("## Retrieval Test")
+                retrieval_query = gr.Textbox(label="Query", lines=2)
+                retrieval_mode = gr.Dropdown(
+                    label="Mode",
+                    choices=["mix", "naive", "local", "global"],
+                    value="mix",
+                    interactive=True,
+                )
+                retrieval_test_btn = gr.Button("Run Retrieval Test")
+                retrieval_test_output = gr.Textbox(
+                    label="Retrieved Chunks",
+                    lines=10,
+                    interactive=False,
+                )
+
             with gr.Column(scale=2, min_width=520):
                 gr.Markdown("## 对话")
                 with gr.Row():
@@ -270,6 +313,11 @@ def build_ui():
             delete_file,
             inputs=delete_file_select,
             outputs=[upload_status, doc_stats, doc_table, delete_file_select],
+        )
+        retrieval_test_btn.click(
+            run_retrieval_test,
+            inputs=[retrieval_query, retrieval_mode],
+            outputs=retrieval_test_output,
         )
         new_btn.click(
             new_chat,

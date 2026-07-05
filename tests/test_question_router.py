@@ -44,3 +44,30 @@ def test_missing_evidence_with_file_ids_promotes_to_document_route():
     assert route["needs_documents"] is True
     assert route["relevant_file_ids"] == ["file-1"]
 
+
+def test_mix_route_is_supported():
+    route = _normalize_route(
+        {
+            "mode": "mix",
+            "needs_documents": True,
+            "relevant_file_ids": ["file-1"],
+        }
+    )
+
+    assert route["mode"] == "mix"
+    assert route["needs_documents"] is True
+    assert route["can_use_general_knowledge"] is True
+
+
+def test_mix_route_without_file_ids_can_search_all_documents():
+    route = _normalize_route(
+        {
+            "mode": "mix",
+            "needs_documents": True,
+            "relevant_file_ids": [],
+        }
+    )
+
+    assert route["mode"] == "mix"
+    assert route["needs_documents"] is True
+    assert route["relevant_file_ids"] == []

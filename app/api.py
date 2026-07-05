@@ -5,7 +5,9 @@ from pydantic import BaseModel
 
 from app import chat_store
 from app.document_loader import load_file_from_bytes
+from app.hybrid_retrieval import hybrid_search
 from app.knowledge_index import remove_document_from_index, summarize_document
+from app.light_graph import build_graph_for_document, remove_document_from_graph
 from app.rag_chain import answer_question
 from app.text_splitter import split_documents
 from app.vector_store import add_documents, delete_by_file, get_all_files, get_stats
@@ -19,6 +21,13 @@ class ChatRequest(BaseModel):
     conversation_id: str | None = None
 
 
+class RetrievalTestRequest(BaseModel):
+    query: str
+    mode: str = "mix"
+    file_ids: list[str] | None = None
+    top_k: int = 8
+
+
 @router.post("/upload")
 async def upload_documents(files: list[UploadFile] = File(...)) -> dict[str, Any]:
     uploaded = []
@@ -27,7 +36,8 @@ async def upload_documents(files: list[UploadFile] = File(...)) -> dict[str, Any
         docs = load_file_from_bytes(content, file.filename or "uploaded.txt")
         chunks = split_documents(docs)
         file_id = add_documents(chunks, file.filename or "uploaded.txt")
-        summarize_document(file_id, file.filename or "uploaded.txt", chunks)
+        summary = summarize_document(file_id, file.filename or "uploaded.txt", chunks)
+        build_graph_for_document(file_id, file.filename or "uploaded.txt", chunks, summary)
         uploaded.append(
             {
                 "file_id": file_id,
@@ -47,6 +57,7 @@ def documents() -> dict[str, Any]:
 def delete_document(file_id: str) -> dict[str, Any]:
     deleted = delete_by_file(file_id)
     remove_document_from_index(file_id)
+    remove_document_from_graph(file_id)
     return {"deleted_chunks": deleted}
 
 
@@ -70,6 +81,36 @@ def chat(request: ChatRequest) -> dict[str, Any]:
     )
     result["conversation_id"] = conversation_id
     return result
+
+
+@router.post("/retrieval-test")
+def retrieval_test(request: RetrievalTestRequest) -> dict[str, Any]:
+    if not request.query.strip():
+        raise HTTPException(status_code=400, detail="query cannot be empty")
+    top_k = max(1, min(request.top_k, 20))
+    result = hybrid_search(
+        request.query,
+        k=top_k,
+        file_ids=request.file_ids,
+        mode=request.mode,
+    )
+    chunks = []
+    for doc in result.docs:
+        meta = doc.metadata or {}
+        chunks.append(
+            {
+                "file_id": meta.get("file_id"),
+                "file_name": meta.get("file_name") or meta.get("source"),
+                "chunk_index": meta.get("chunk_index"),
+                "score": meta.get("retrieval_score"),
+                "methods": meta.get("retrieval_methods", []),
+                "vector_score": meta.get("vector_score"),
+                "keyword_score": meta.get("keyword_score"),
+                "graph_score": meta.get("graph_score"),
+                "snippet": (doc.page_content or "").replace("\n", " ")[:240],
+            }
+        )
+    return {"chunks": chunks, "debug": result.debug}
 
 
 @router.get("/conversations")
