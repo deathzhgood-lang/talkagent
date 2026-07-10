@@ -4,6 +4,7 @@ from fastapi import APIRouter, File, HTTPException, UploadFile
 from pydantic import BaseModel
 
 from app import chat_store
+from app import trace_store
 from app.document_loader import load_file_from_bytes
 from app.hybrid_retrieval import hybrid_search
 from app.knowledge_index import remove_document_from_index, summarize_document
@@ -111,6 +112,20 @@ def retrieval_test(request: RetrievalTestRequest) -> dict[str, Any]:
             }
         )
     return {"chunks": chunks, "debug": result.debug}
+
+
+@router.get("/traces")
+def traces(search: str = "", limit: int = 50) -> dict[str, Any]:
+    """Search local audit traces by question, file name, or candidate text."""
+    return {"traces": trace_store.list_runs(search=search, limit=limit)}
+
+
+@router.get("/traces/{trace_id}")
+def trace_detail(trace_id: str) -> dict[str, Any]:
+    trace = trace_store.get_run(trace_id)
+    if trace is None:
+        raise HTTPException(status_code=404, detail="trace not found")
+    return trace
 
 
 @router.get("/conversations")

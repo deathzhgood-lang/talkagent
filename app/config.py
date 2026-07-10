@@ -38,6 +38,8 @@ UPLOAD_DIR = os.path.join(DATA_DIR, "uploads")
 CHROMA_DIR = os.path.join(DATA_DIR, "chroma")
 CONVERSATIONS_DIR = os.path.join(DATA_DIR, "conversations")
 KNOWLEDGE_INDEX_DIR = os.path.join(DATA_DIR, "knowledge_index")
+OBSERVABILITY_DIR = os.path.join(DATA_DIR, "observability")
+TRACE_DB_PATH = os.path.join(OBSERVABILITY_DIR, "traces.sqlite3")
 
 # Supported files
 SUPPORTED_EXTENSIONS = set(
@@ -51,5 +53,13 @@ SUPPORTED_EXTENSIONS = set(
 GRADIO_PORT = int(os.getenv("GRADIO_PORT", "7860"))
 API_PORT = int(os.getenv("API_PORT", "8000"))
 
-for directory in [DATA_DIR, UPLOAD_DIR, CHROMA_DIR, CONVERSATIONS_DIR, KNOWLEDGE_INDEX_DIR, MODEL_CACHE_DIR]:
+for directory in [
+    DATA_DIR,
+    UPLOAD_DIR,
+    CHROMA_DIR,
+    CONVERSATIONS_DIR,
+    KNOWLEDGE_INDEX_DIR,
+    OBSERVABILITY_DIR,
+    MODEL_CACHE_DIR,
+]:
     os.makedirs(directory, exist_ok=True)

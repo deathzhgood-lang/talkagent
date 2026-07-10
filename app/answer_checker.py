@@ -9,8 +9,18 @@ def check_answer(
     route: dict[str, Any],
     context: str,
 ) -> str:
+    final_answer, _ = check_answer_with_trace(question, answer, route, context)
+    return final_answer
+
+
+def check_answer_with_trace(
+    question: str,
+    answer: str,
+    route: dict[str, Any],
+    context: str,
+) -> tuple[str, dict[str, Any]]:
     if route.get("mode") == "general":
-        return answer
+        return answer, {"status": "skipped", "reason": "general_route"}
 
     prompt = f"""你是客服回答的事实自查器。请检查回答是否忠于参考文档。
 
@@ -44,9 +54,15 @@ JSON 格式：
         raw = generate_text(prompt, timeout=90)
         data = extract_json_object(raw) or {}
         final_answer = str(data.get("final_answer", "")).strip() or answer
-        return _ensure_prefix(final_answer, route)
+        return _ensure_prefix(final_answer, route), {
+            "status": "completed",
+            "needs_revision": bool(data.get("needs_revision", False)),
+        }
     except Exception:
-        return _ensure_prefix(answer, route)
+        return _ensure_prefix(answer, route), {
+            "status": "fallback",
+            "reason": "checker_unavailable",
+        }
 
 
 def _ensure_prefix(answer: str, route: dict[str, Any]) -> str:

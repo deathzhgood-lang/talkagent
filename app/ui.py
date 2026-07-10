@@ -1,9 +1,11 @@
+import json
 from pathlib import Path
 from typing import Any
 
 import gradio as gr
 
 from app import chat_store
+from app import trace_store
 from app.document_loader import load_file_from_bytes
 from app.hybrid_retrieval import hybrid_search
 from app.knowledge_index import remove_document_from_index, summarize_document
@@ -38,6 +40,104 @@ def _conversation_choices() -> list[tuple[str, str]]:
         label = f"{item['title']} · {item['message_count']} 条 · {item['updated_at']}"
         choices.append((label, item["id"]))
     return choices
+
+
+def _trace_choices(search: str = "") -> list[tuple[str, str]]:
+    choices = []
+    for trace in trace_store.list_runs(search=search, limit=60):
+        question = " ".join((trace.get("question") or "").split())[:48]
+        label = (
+            f"{trace.get('started_at', '')[:19]} | {trace.get('status')} | "
+            f"{trace.get('candidate_count', 0)} chunks | {question}"
+        )
+        choices.append((label, trace["trace_id"]))
+    return choices
+
+
+def refresh_traces(search: str = ""):
+    try:
+        choices = _trace_choices(search or "")
+    except Exception as exc:
+        return gr.update(choices=[], value=None), f"Trace 查询失败: {exc}"
+    value = choices[0][1] if choices else None
+    return gr.update(choices=choices, value=value), f"找到 {len(choices)} 条 Trace"
+
+
+def _json_text(value: Any) -> str:
+    return json.dumps(value, ensure_ascii=False, indent=2, default=str)
+
+
+def load_trace(trace_id: str | None, candidate_search: str = ""):
+    if not trace_id:
+        return "尚未选择 Trace。", "", ""
+    try:
+        trace = trace_store.get_run(trace_id)
+    except Exception as exc:
+        return f"Trace 加载失败: {exc}", "", ""
+    if trace is None:
+        return "Trace 不存在。", "", ""
+
+    route_event = next(
+        (event for event in trace["events"] if event["stage"] == "route_decided"),
+        None,
+    )
+    overview_lines = [
+        f"Trace ID: {trace['trace_id']}",
+        f"状态: {trace['status']}",
+        f"开始时间: {trace['started_at']}",
+        f"总耗时: {trace.get('duration_ms') or 0} ms",
+        f"用户问题: {trace['question']}",
+        f"路由模式: {trace.get('route_mode') or '-'}",
+        f"回答标签: {trace.get('answer_label') or '-'}",
+    ]
+    if trace.get("error"):
+        overview_lines.append(f"异常: {trace['error']}")
+    if route_event:
+        overview_lines.extend(["", "路由判断:", _json_text(route_event["payload"])])
+
+    timeline_lines = []
+    for event in trace["events"]:
+        duration = f" {event['duration_ms']} ms" if event.get("duration_ms") is not None else ""
+        timeline_lines.append(
+            f"[{event['sequence']}] {event['stage']} / {event['status']}{duration}\n"
+            f"{event['summary']}\n{_json_text(event['payload'])}"
+        )
+
+    keyword = (candidate_search or "").strip().lower()
+    all_candidates = trace["candidates"]
+    candidates = [
+        candidate
+        for candidate in all_candidates
+        if not keyword
+        or keyword in (candidate.get("file_name") or "").lower()
+        or keyword in (candidate.get("content") or "").lower()
+        or keyword in (candidate.get("retrieval_query") or "").lower()
+    ]
+    candidate_lines = [
+        f"显示 {len(candidates)} / {len(all_candidates)} 个已考察片段。"
+    ]
+    for candidate in candidates[:80]:
+        context_status = "已送入上下文" if candidate["used_in_context"] else "仅候选"
+        candidate_lines.extend(
+            [
+                "",
+                (
+                    f"[{context_status}] query={candidate['retrieval_query']} "
+                    f"rank={candidate['rank']} score={candidate['score']} "
+                    f"methods={','.join(candidate['methods'])}"
+                ),
+                (
+                    f"file={candidate['file_name']} file_id={candidate['file_id']} "
+                    f"chunk={candidate['chunk_index']} vector={candidate['vector_score']} "
+                    f"keyword={candidate['keyword_score']} graph={candidate['graph_score']}"
+                ),
+                candidate["content"],
+            ]
+        )
+    if len(candidates) > 80:
+        candidate_lines.append("\n仅显示前 80 个匹配片段。")
+
+    return "\n".join(overview_lines), "\n\n".join(timeline_lines), "\n".join(candidate_lines)
 
 
 def _format_sources(sources: list[dict[str, Any]] | None) -> str:
@@ -300,6 +400,24 @@ def build_ui():
                     clear_input_btn = gr.Button("清空输入")
                 sources_box = gr.Textbox(label="本轮来源", value="暂无来源", lines=6, interactive=False)
 
+        with gr.Accordion("开发者控制台", open=False):
+            with gr.Row():
+                trace_search = gr.Textbox(label="Trace 检索", lines=1)
+                trace_refresh_btn = gr.Button("刷新 Trace")
+            trace_status = gr.Textbox(label="Trace 状态", interactive=False)
+            trace_select = gr.Dropdown(
+                label="Trace 运行记录",
+                choices=_trace_choices(),
+                value=None,
+                interactive=True,
+            )
+            with gr.Row():
+                trace_candidate_search = gr.Textbox(label="候选片段检索", lines=1)
+                trace_load_btn = gr.Button("查看 Trace")
+            trace_overview = gr.Textbox(label="Trace 概览", lines=13, interactive=False)
+            trace_timeline = gr.Textbox(label="决策与执行时间线", lines=22, interactive=False)
+            trace_candidates = gr.Textbox(label="已考察片段", lines=28, interactive=False)
+
         upload_btn.click(
             upload_files,
             inputs=files,
@@ -344,5 +462,25 @@ def build_ui():
             outputs=[chatbot, conversation_id, message, conversation_select, chat_status, sources_box],
         )
         clear_input_btn.click(lambda: "", outputs=message)
+        trace_refresh_btn.click(
+            refresh_traces,
+            inputs=trace_search,
+            outputs=[trace_select, trace_status],
+        )
+        trace_load_btn.click(
+            load_trace,
+            inputs=[trace_select, trace_candidate_search],
+            outputs=[trace_overview, trace_timeline, trace_candidates],
+        )
+        trace_select.change(
+            load_trace,
+            inputs=[trace_select, trace_candidate_search],
+            outputs=[trace_overview, trace_timeline, trace_candidates],
+        )
+        trace_candidate_search.submit(
+            load_trace,
+            inputs=[trace_select, trace_candidate_search],
+            outputs=[trace_overview, trace_timeline, trace_candidates],
+        )
 
     return demo

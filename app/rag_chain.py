@@ -1,14 +1,16 @@
 import re
+from time import perf_counter
 from typing import Any
 from urllib.error import HTTPError
 
 from app import chat_store
-from app.answer_checker import check_answer
+from app.answer_checker import check_answer_with_trace
 from app.config import CHAT_HISTORY_ROUNDS, RETRIEVAL_K
 from app.hybrid_retrieval import RetrievalResult, hybrid_search
 from app.knowledge_index import get_document_summaries
 from app.llm_client import generate_text
 from app.question_router import route_question
+from app import trace_store
 
 
 ANSWER_PROMPT = """你是一个可工作的 AI 客服助手。
@@ -22,6 +24,62 @@ ANSWER_PROMPT = """你是一个可工作的 AI 客服助手。
 回答开头必须使用其中一个标签：
 【通用回答】、【基于文档】、【综合回答】、【缺少依据】
 """
+
+
+def _start_trace(question: str, conversation_id: str | None) -> str | None:
+    try:
+        return trace_store.start_run(question, conversation_id)
+    except Exception:
+        return None
+
+
+def _trace_event(
+    trace_id: str | None,
+    stage: str,
+    status: str,
+    summary: str,
+    payload: dict[str, Any] | None = None,
+    duration_ms: int | None = None,
+) -> None:
+    if not trace_id:
+        return
+    try:
+        trace_store.add_event(trace_id, stage, status, summary, payload, duration_ms)
+    except Exception:
+        pass
+
+
+def _trace_candidates(trace_id: str | None, retrieval: RetrievalResult) -> None:
+    if not trace_id:
+        return
+    grouped: dict[str, list[Any]] = {}
+    for candidate in retrieval.candidates:
+        query = str((candidate.metadata or {}).get("retrieval_query", ""))
+        grouped.setdefault(query, []).append(candidate)
+    try:
+        for query, candidates in grouped.items():
+            trace_store.record_candidates(trace_id, query, candidates, retrieval.docs)
+    except Exception:
+        pass
+
+
+def _complete_trace(
+    trace_id: str | None,
+    route: dict[str, Any],
+    answer: str,
+    error: str | None = None,
+) -> None:
+    if not trace_id:
+        return
+    try:
+        trace_store.complete_run(
+            trace_id,
+            route_mode=str(route.get("mode", "")),
+            answer=answer,
+            error=error,
+        )
+    except Exception:
+        pass
 
 
 def _format_context(docs: list[Any]) -> str:
@@ -72,7 +130,9 @@ def _retrieve_for_route(question: str, route: dict[str, Any]) -> RetrievalResult
     queries = _expanded_queries(question)
     docs: list[Any] = []
     debug: list[dict[str, Any]] = []
+    candidates: list[Any] = []
     seen: set[tuple[str, Any, str]] = set()
+    seen_candidates: set[tuple[str, str, Any, str]] = set()
     k = max(RETRIEVAL_K, 10) if _is_enumeration_question(question) else RETRIEVAL_K
     mode = _retrieval_mode(route)
     for query in queries:
@@ -82,6 +142,19 @@ def _retrieve_for_route(question: str, route: dict[str, Any]) -> RetrievalResult
             item["query"] = query
             item["mode"] = mode
             debug.append(item)
+        for candidate in result.candidates:
+            metadata = candidate.metadata or {}
+            candidate_key = (
+                query,
+                str(metadata.get("file_id", "")),
+                metadata.get("chunk_index", ""),
+                candidate.page_content[:80],
+            )
+            if candidate_key in seen_candidates:
+                continue
+            seen_candidates.add(candidate_key)
+            candidate.metadata["retrieval_query"] = query
+            candidates.append(candidate)
         for doc in result.docs:
             meta = doc.metadata or {}
             key = (
@@ -92,8 +165,13 @@ def _retrieve_for_route(question: str, route: dict[str, Any]) -> RetrievalResult
             if key in seen:
                 continue
             seen.add(key)
+            doc.metadata["retrieval_query"] = query
             docs.append(doc)
-    return RetrievalResult(docs=docs[: max(k, RETRIEVAL_K)], debug=debug)
+    return RetrievalResult(
+        docs=docs[: max(k, RETRIEVAL_K)],
+        debug=debug,
+        candidates=candidates,
+    )
 
 
 def _is_enumeration_question(question: str) -> bool:
@@ -212,12 +290,98 @@ def _enforce_required_items(question: str, answer: str, route: dict[str, Any], d
 
 
 def answer_question(question: str, conversation_id: str | None = None) -> dict[str, Any]:
+    trace_id = _start_trace(question, conversation_id)
     history = chat_store.format_recent_history(conversation_id, CHAT_HISTORY_ROUNDS)
-    route = route_question(question, history)
-    retrieval = _retrieve_for_route(question, route)
+    _trace_event(
+        trace_id,
+        "history_compiled",
+        "completed",
+        "已整理本轮问答需要的历史上下文。",
+        {
+            "history_characters": len(history),
+            "history_round_limit": CHAT_HISTORY_ROUNDS,
+        },
+    )
+
+    route_started = perf_counter()
+    try:
+        route = route_question(question, history)
+    except Exception as exc:
+        _trace_event(
+            trace_id,
+            "route_decided",
+            "failed",
+            "问题路由在检索前失败。",
+            {"error": str(exc)},
+            int((perf_counter() - route_started) * 1000),
+        )
+        _complete_trace(trace_id, {}, "", error=str(exc))
+        raise
+    _trace_event(
+        trace_id,
+        "route_decided",
+        "completed",
+        "已确定本轮问题的检索策略。",
+        route,
+        int((perf_counter() - route_started) * 1000),
+    )
+
+    retrieval_started = perf_counter()
+    try:
+        retrieval = _retrieve_for_route(question, route)
+    except Exception as exc:
+        _trace_event(
+            trace_id,
+            "retrieval_completed",
+            "failed",
+            "文档检索失败。",
+            {"error": str(exc)},
+            int((perf_counter() - retrieval_started) * 1000),
+        )
+        _complete_trace(trace_id, route, "", error=str(exc))
+        raise
     docs = retrieval.docs
+    _trace_candidates(trace_id, retrieval)
+    _trace_event(
+        trace_id,
+        "retrieval_completed",
+        "completed" if docs else "empty",
+        "已召回并排序回答所需的文档候选片段。",
+        {
+            "retrieval_mode": _retrieval_mode(route),
+            "queries": sorted(
+                {
+                    str((candidate.metadata or {}).get("retrieval_query", ""))
+                    for candidate in retrieval.candidates
+                }
+            ),
+            "candidate_count": len(retrieval.candidates),
+            "context_chunk_count": len(docs),
+            "top_results": retrieval.debug,
+        },
+        int((perf_counter() - retrieval_started) * 1000),
+    )
     doc_context = _format_context(docs)
     doc_summaries = get_document_summaries(route.get("relevant_file_ids", []))
+    _trace_event(
+        trace_id,
+        "context_built",
+        "completed",
+        "已将选中的片段和文档摘要组装为回答上下文。",
+        {
+            "context_characters": len(doc_context),
+            "summary_characters": len(doc_summaries),
+            "context_chunks": [
+                {
+                    "file_id": (doc.metadata or {}).get("file_id"),
+                    "file_name": (doc.metadata or {}).get("file_name"),
+                    "chunk_index": (doc.metadata or {}).get("chunk_index"),
+                    "score": (doc.metadata or {}).get("retrieval_score"),
+                }
+                for doc in docs
+            ],
+        },
+    )
 
     prompt = f"""{ANSWER_PROMPT}
 
@@ -238,13 +402,33 @@ def answer_question(question: str, conversation_id: str | None = None) -> dict[s
 
 请给出最终回答："""
 
+    generation_failed = False
     try:
+        answer_started = perf_counter()
         answer = generate_text(prompt, timeout=120)
+        _trace_event(
+            trace_id,
+            "answer_generated",
+            "completed",
+            "已根据选中上下文生成初始回答。",
+            {"answer_characters": len(answer)},
+            int((perf_counter() - answer_started) * 1000),
+        )
         check_context = "\n\n".join(part for part in [doc_summaries, doc_context] if part)
-        answer = check_answer(question, answer, route, check_context)
+        checker_started = perf_counter()
+        answer, checker_trace = check_answer_with_trace(question, answer, route, check_context)
+        _trace_event(
+            trace_id,
+            "answer_checked",
+            str(checker_trace.get("status", "completed")),
+            "已执行基于证据的回答自检。",
+            checker_trace,
+            int((perf_counter() - checker_started) * 1000),
+        )
         answer = _normalize_answer_label(answer, route)
         answer = _enforce_required_items(question, answer, route, docs)
     except Exception as exc:
+        generation_failed = True
         reason = str(exc)
         if isinstance(exc, HTTPError):
             reason = f"HTTP {exc.code}: {exc.reason}"
@@ -257,10 +441,30 @@ def answer_question(question: str, conversation_id: str | None = None) -> dict[s
         else:
             answer = f"【缺少依据】本地大模型暂时不可用，且没有可参考的文档内容。\n\n不可用原因: {reason}"
 
+    if generation_failed:
+        _trace_event(
+            trace_id,
+            "answer_generated",
+            "fallback",
+            "模型回答失败，系统已返回检索结果兜底内容。",
+            {"error": reason, "context_chunk_count": len(docs)},
+        )
+
+    sources = _sources_for_answer(answer, docs)
+    _trace_event(
+        trace_id,
+        "response_completed",
+        "completed",
+        "已返回最终回答及可见来源。",
+        {"source_count": len(sources), "answer_characters": len(answer)},
+    )
+    _complete_trace(trace_id, route, answer)
+
     return {
         "answer": answer,
-        "sources": _sources_for_answer(answer, docs),
+        "sources": sources,
         "conversation_id": conversation_id,
         "route": route,
         "retrieval_debug": retrieval.debug,
+        "trace_id": trace_id,
     }

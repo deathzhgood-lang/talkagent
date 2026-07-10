@@ -1,7 +1,7 @@
 import math
 import re
 from collections import Counter, defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from langchain_core.documents import Document
@@ -17,6 +17,7 @@ WORD_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_.-]{1,}|[\u4e00-\u9fff]{2,}")
 class RetrievalResult:
     docs: list[Document]
     debug: list[dict[str, Any]]
+    candidates: list[Document] = field(default_factory=list)
 
 
 def _tokenize(text: str) -> list[str]:
@@ -191,10 +192,12 @@ def hybrid_search(
 
     ranked_keys = sorted(final_scores, key=lambda key: final_scores[key], reverse=True)
     ranked_docs: list[Document] = []
+    candidate_docs: list[Document] = []
     debug: list[dict[str, Any]] = []
-    for rank, key in enumerate(ranked_keys[:k], start=1):
+    for rank, key in enumerate(ranked_keys, start=1):
         doc = documents[key]
         methods = sorted(method_details.get(key, []))
+        doc.metadata["retrieval_rank"] = rank
         doc.metadata["retrieval_score"] = round(final_scores[key], 4)
         doc.metadata["retrieval_methods"] = methods
         doc.metadata["vector_score"] = round(normalized["vector"].get(key, 0.0), 4)
@@ -202,19 +205,21 @@ def hybrid_search(
         doc.metadata["graph_score"] = round(normalized["graph"].get(key, 0.0), 4)
         if key in graph_hits:
             doc.metadata["graph_matched_terms"] = graph_hits[key].get("matched_terms", [])
-        ranked_docs.append(doc)
-        debug.append(
-            {
-                "rank": rank,
-                "file_id": key[0],
-                "chunk_index": key[1],
-                "file_name": doc.metadata.get("file_name") or doc.metadata.get("source"),
-                "score": doc.metadata["retrieval_score"],
-                "methods": methods,
-                "vector_score": doc.metadata["vector_score"],
-                "keyword_score": doc.metadata["keyword_score"],
-                "graph_score": doc.metadata["graph_score"],
-            }
-        )
+        candidate_docs.append(doc)
+        if rank <= k:
+            ranked_docs.append(doc)
+            debug.append(
+                {
+                    "rank": rank,
+                    "file_id": key[0],
+                    "chunk_index": key[1],
+                    "file_name": doc.metadata.get("file_name") or doc.metadata.get("source"),
+                    "score": doc.metadata["retrieval_score"],
+                    "methods": methods,
+                    "vector_score": doc.metadata["vector_score"],
+                    "keyword_score": doc.metadata["keyword_score"],
+                    "graph_score": doc.metadata["graph_score"],
+                }
+            )
 
-    return RetrievalResult(docs=ranked_docs, debug=debug)
+    return RetrievalResult(docs=ranked_docs, debug=debug, candidates=candidate_docs)
