@@ -124,6 +124,10 @@ talkagent/
 
 ## 快速开始
 
+### Windows 应用入口
+
+双击根目录的 `TalkAgent.pyw` 即可启动应用；如果服务已运行，它会直接打开现有页面。图标文件位于 `assets/talkagent.ico`，可用于创建 Windows 桌面快捷方式。
+
 1. 安装依赖：
 
 ```bash
