@@ -78,6 +78,10 @@ def refresh_traces(search: str = ""):
     return gr.update(choices=choices, value=value), f"找到 {len(choices)} 条 Trace"
 
 
+def set_developer_mode(enabled: bool):
+    return gr.update(visible=bool(enabled))
+
+
 def _json_text(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, indent=2, default=str)
 
@@ -358,6 +362,7 @@ def build_ui():
         with gr.Row():
             with gr.Column(scale=1, min_width=320):
                 gr.Markdown("## 知识库")
+                developer_mode = gr.Checkbox(label="开发者模式", value=False)
                 files = gr.File(
                     label="上传文档",
                     file_count="multiple",
@@ -382,21 +387,6 @@ def build_ui():
                 )
                 delete_file_btn = gr.Button("删除所选文档")
 
-                gr.Markdown("## Retrieval Test")
-                retrieval_query = gr.Textbox(label="Query", lines=2)
-                retrieval_mode = gr.Dropdown(
-                    label="Mode",
-                    choices=["mix", "naive", "local", "global"],
-                    value="mix",
-                    interactive=True,
-                )
-                retrieval_test_btn = gr.Button("Run Retrieval Test")
-                retrieval_test_output = gr.Textbox(
-                    label="Retrieved Chunks",
-                    lines=10,
-                    interactive=False,
-                )
-
             with gr.Column(scale=2, min_width=520):
                 gr.Markdown("## 对话")
                 with gr.Row():
@@ -416,31 +406,46 @@ def build_ui():
                     clear_input_btn = gr.Button("清空输入")
                 sources_box = gr.Textbox(label="本轮来源", value="暂无来源", lines=6, interactive=False)
 
-        with gr.Accordion("开发者控制台", open=False):
-            with gr.Row():
-                health_status = gr.Textbox(
-                    label="Embedding 与索引健康状态",
-                    value=_system_health_text(),
-                    lines=6,
+        with gr.Column(visible=False) as developer_console:
+            with gr.Accordion("开发者控制台", open=True):
+                with gr.Row():
+                    health_status = gr.Textbox(
+                        label="Embedding 与索引健康状态",
+                        value=_system_health_text(),
+                        lines=6,
+                        interactive=False,
+                    )
+                    refresh_health_btn = gr.Button("刷新健康状态")
+                with gr.Row():
+                    retrieval_query = gr.Textbox(label="检索测试问题", lines=2)
+                    retrieval_mode = gr.Dropdown(
+                        label="检索模式",
+                        choices=["mix", "naive", "local", "global"],
+                        value="mix",
+                        interactive=True,
+                    )
+                    retrieval_test_btn = gr.Button("运行检索测试")
+                retrieval_test_output = gr.Textbox(
+                    label="检索片段",
+                    lines=10,
                     interactive=False,
                 )
-                refresh_health_btn = gr.Button("刷新健康状态")
-            with gr.Row():
-                trace_search = gr.Textbox(label="Trace 检索", lines=1)
-                trace_refresh_btn = gr.Button("刷新 Trace")
-            trace_status = gr.Textbox(label="Trace 状态", interactive=False)
-            trace_select = gr.Dropdown(
-                label="Trace 运行记录",
-                choices=_trace_choices(),
-                value=None,
-                interactive=True,
-            )
-            with gr.Row():
-                trace_candidate_search = gr.Textbox(label="候选片段检索", lines=1)
-                trace_load_btn = gr.Button("查看 Trace")
-            trace_overview = gr.Textbox(label="Trace 概览", lines=13, interactive=False)
-            trace_timeline = gr.Textbox(label="决策与执行时间线", lines=22, interactive=False)
-            trace_candidates = gr.Textbox(label="已考察片段", lines=28, interactive=False)
+                with gr.Row():
+                    trace_search = gr.Textbox(label="Trace 检索", lines=1)
+                    trace_refresh_btn = gr.Button("刷新 Trace")
+                trace_status = gr.Textbox(label="Trace 状态", interactive=False)
+                trace_select = gr.Dropdown(
+                    label="Trace 运行记录",
+                    choices=_trace_choices(),
+                    value=None,
+                    interactive=True,
+                )
+                with gr.Row():
+                    trace_candidate_search = gr.Textbox(label="候选片段检索", lines=1)
+                    trace_load_btn = gr.Button("查看 Trace")
+                trace_overview = gr.Textbox(label="Trace 概览", lines=13, interactive=False)
+                trace_timeline = gr.Textbox(label="决策与执行时间线", lines=22, interactive=False)
+                trace_candidates = gr.Textbox(label="已考察片段", lines=28, interactive=False)
 
         upload_btn.click(
             upload_files,
@@ -486,6 +491,11 @@ def build_ui():
             outputs=[chatbot, conversation_id, message, conversation_select, chat_status, sources_box],
         )
         clear_input_btn.click(lambda: "", outputs=message)
+        developer_mode.change(
+            set_developer_mode,
+            inputs=developer_mode,
+            outputs=developer_console,
+        )
         trace_refresh_btn.click(
             refresh_traces,
             inputs=trace_search,
