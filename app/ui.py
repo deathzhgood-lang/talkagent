@@ -12,7 +12,7 @@ from app.knowledge_index import remove_document_from_index, summarize_document
 from app.light_graph import build_graph_for_document, remove_document_from_graph
 from app.rag_chain import answer_question
 from app.text_splitter import split_documents
-from app.vector_store import add_documents, delete_by_file, get_all_files, get_stats
+from app.vector_store import add_documents, delete_by_file, get_all_files, get_index_embedding_status, get_stats
 
 
 def _document_rows() -> list[list[Any]]:
@@ -25,6 +25,21 @@ def _document_rows() -> list[list[Any]]:
 def _document_stats() -> str:
     stats = get_stats()
     return f"文件数: {stats['total_files']}    片段数: {stats['total_chunks']}"
+
+
+def _system_health_text() -> str:
+    status = get_index_embedding_status()
+    semantic_state = "可用" if status["semantic_ready"] else "不可用"
+    index_state = status["index_state"]
+    fingerprints = ", ".join(status["index_fingerprints"]) or "无"
+    return (
+        f"Embedding 后端: {status['backend']}\n"
+        f"语义检索: {semantic_state}\n"
+        f"索引状态: {index_state}\n"
+        f"当前指纹: {status['current_fingerprint']}\n"
+        f"索引指纹: {fingerprints}\n"
+        f"说明: {status['message']}"
+    )
 
 
 def _file_choices() -> list[tuple[str, str]]:
@@ -129,6 +144,7 @@ def load_trace(trace_id: str | None, candidate_search: str = ""):
                 (
                     f"file={candidate['file_name']} file_id={candidate['file_id']} "
                     f"chunk={candidate['chunk_index']} vector={candidate['vector_score']} "
+                    f"vector_confidence={candidate.get('vector_confidence')} "
                     f"keyword={candidate['keyword_score']} graph={candidate['graph_score']}"
                 ),
                 candidate["content"],
@@ -402,6 +418,14 @@ def build_ui():
 
         with gr.Accordion("开发者控制台", open=False):
             with gr.Row():
+                health_status = gr.Textbox(
+                    label="Embedding 与索引健康状态",
+                    value=_system_health_text(),
+                    lines=6,
+                    interactive=False,
+                )
+                refresh_health_btn = gr.Button("刷新健康状态")
+            with gr.Row():
                 trace_search = gr.Textbox(label="Trace 检索", lines=1)
                 trace_refresh_btn = gr.Button("刷新 Trace")
             trace_status = gr.Textbox(label="Trace 状态", interactive=False)
@@ -467,6 +491,7 @@ def build_ui():
             inputs=trace_search,
             outputs=[trace_select, trace_status],
         )
+        refresh_health_btn.click(_system_health_text, outputs=health_status)
         trace_load_btn.click(
             load_trace,
             inputs=[trace_select, trace_candidate_search],

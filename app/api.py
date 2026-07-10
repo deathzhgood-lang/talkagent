@@ -11,7 +11,7 @@ from app.knowledge_index import remove_document_from_index, summarize_document
 from app.light_graph import build_graph_for_document, remove_document_from_graph
 from app.rag_chain import answer_question
 from app.text_splitter import split_documents
-from app.vector_store import add_documents, delete_by_file, get_all_files, get_stats
+from app.vector_store import add_documents, delete_by_file, get_all_files, get_index_embedding_status, get_stats
 
 
 router = APIRouter(prefix="/api")
@@ -106,12 +106,18 @@ def retrieval_test(request: RetrievalTestRequest) -> dict[str, Any]:
                 "score": meta.get("retrieval_score"),
                 "methods": meta.get("retrieval_methods", []),
                 "vector_score": meta.get("vector_score"),
+                "vector_confidence": meta.get("vector_confidence"),
                 "keyword_score": meta.get("keyword_score"),
                 "graph_score": meta.get("graph_score"),
                 "snippet": (doc.page_content or "").replace("\n", " ")[:240],
             }
         )
     return {"chunks": chunks, "debug": result.debug}
+
+
+@router.get("/system-status")
+def system_status() -> dict[str, Any]:
+    return {"knowledge_base": get_stats(), "embedding": get_index_embedding_status()}
 
 
 @router.get("/traces")

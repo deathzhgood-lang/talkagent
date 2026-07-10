@@ -64,3 +64,37 @@ def test_required_parameter_answer_can_be_enforced(monkeypatch):
 
     assert "prompt" in answer
     assert "req_key" in answer
+
+
+def test_document_probe_overrides_a_general_route_with_keyword_evidence(monkeypatch):
+    rag_chain = _load_rag_chain(monkeypatch)
+    doc = SimpleNamespace(
+        page_content="The refund policy is seven days.",
+        metadata={
+            "file_id": "file-1",
+            "file_name": "policy.md",
+            "chunk_index": 0,
+            "retrieval_methods": ["keyword"],
+            "retrieval_score": 0.8,
+            "vector_confidence": 0.0,
+        },
+    )
+    probe = rag_chain.RetrievalResult(docs=[doc], debug=[], candidates=[doc])
+    monkeypatch.setattr(rag_chain, "get_all_files", lambda: [{"file_id": "file-1"}])
+    monkeypatch.setattr(rag_chain, "hybrid_search", lambda *args, **kwargs: probe)
+    monkeypatch.setattr(rag_chain, "semantic_embedding_ready", lambda: False)
+
+    route, retrieval, trace = rag_chain._retrieve_with_document_probe(
+        "What is the refund policy?",
+        {
+            "mode": "general",
+            "needs_documents": False,
+            "relevant_file_ids": [],
+            "can_use_general_knowledge": True,
+        },
+    )
+
+    assert route["mode"] == "document"
+    assert route["needs_documents"] is True
+    assert retrieval.docs == [doc]
+    assert trace["status"] == "accepted"

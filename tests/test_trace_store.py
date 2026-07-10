@@ -24,6 +24,7 @@ def test_trace_store_records_searchable_candidates(tmp_path, monkeypatch):
             "chunk_index": 2,
             "retrieval_score": 0.81,
             "vector_score": 0.75,
+            "vector_confidence": 0.62,
             "keyword_score": 1.0,
             "graph_score": 0.0,
             "retrieval_methods": ["keyword", "vector"],
@@ -42,11 +43,13 @@ def test_trace_store_records_searchable_candidates(tmp_path, monkeypatch):
     assert trace["events"][1]["payload"]["mode"] == "document"
     assert trace["candidates"][0]["used_in_context"] is True
     assert trace["candidates"][0]["methods"] == ["keyword", "vector"]
+    assert trace["candidates"][0]["vector_confidence"] == 0.62
 
 
 def test_answer_question_persists_an_auditable_trace(tmp_path, monkeypatch):
     monkeypatch.setattr(trace_store, "TRACE_DB_PATH", str(tmp_path / "traces.sqlite3"))
     monkeypatch.setattr(rag_chain.chat_store, "format_recent_history", lambda *_args: "")
+    monkeypatch.setattr(rag_chain, "get_all_files", lambda: [])
     monkeypatch.setattr(
         rag_chain,
         "route_question",
@@ -69,6 +72,7 @@ def test_answer_question_persists_an_auditable_trace(tmp_path, monkeypatch):
         "request_received",
         "history_compiled",
         "route_decided",
+        "document_evidence_probe",
         "retrieval_completed",
         "context_built",
         "answer_generated",

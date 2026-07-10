@@ -154,6 +154,7 @@ def hybrid_search(
         "keyword": {},
         "graph": {},
     }
+    vector_confidences: dict[tuple[str, Any, str], float] = {}
     method_details: dict[tuple[str, Any, str], set[str]] = defaultdict(set)
     graph_hits: dict[tuple[str, Any, str], dict[str, Any]] = {}
 
@@ -163,6 +164,7 @@ def hybrid_search(
         documents[key] = copied
         score = 1.0 / (1.0 + max(float(distance), 0.0))
         method_scores["vector"][key] = max(method_scores["vector"].get(key, 0.0), score)
+        vector_confidences[key] = max(vector_confidences.get(key, 0.0), score)
         method_details[key].add("vector")
 
     for doc, score in _keyword_search(query, file_ids=file_ids, limit=candidate_k):
@@ -201,6 +203,7 @@ def hybrid_search(
         doc.metadata["retrieval_score"] = round(final_scores[key], 4)
         doc.metadata["retrieval_methods"] = methods
         doc.metadata["vector_score"] = round(normalized["vector"].get(key, 0.0), 4)
+        doc.metadata["vector_confidence"] = round(vector_confidences.get(key, 0.0), 4)
         doc.metadata["keyword_score"] = round(normalized["keyword"].get(key, 0.0), 4)
         doc.metadata["graph_score"] = round(normalized["graph"].get(key, 0.0), 4)
         if key in graph_hits:
@@ -217,6 +220,7 @@ def hybrid_search(
                     "score": doc.metadata["retrieval_score"],
                     "methods": methods,
                     "vector_score": doc.metadata["vector_score"],
+                    "vector_confidence": doc.metadata["vector_confidence"],
                     "keyword_score": doc.metadata["keyword_score"],
                     "graph_score": doc.metadata["graph_score"],
                 }

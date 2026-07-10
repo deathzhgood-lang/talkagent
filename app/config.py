@@ -31,6 +31,9 @@ CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", "100"))
 # Retrieval and chat
 RETRIEVAL_K = int(os.getenv("RETRIEVAL_K", "10"))
 CHAT_HISTORY_ROUNDS = int(os.getenv("CHAT_HISTORY_ROUNDS", "10"))
+ROUTER_EVIDENCE_MIN_VECTOR_CONFIDENCE = float(
+    os.getenv("ROUTER_EVIDENCE_MIN_VECTOR_CONFIDENCE", "0.58")
+)
 
 # Storage
 DATA_DIR = str(BASE_DIR / os.getenv("DATA_DIR", "data"))

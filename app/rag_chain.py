@@ -5,12 +5,15 @@ from urllib.error import HTTPError
 
 from app import chat_store
 from app.answer_checker import check_answer_with_trace
-from app.config import CHAT_HISTORY_ROUNDS, RETRIEVAL_K
+from app.config import CHAT_HISTORY_ROUNDS, RETRIEVAL_K, ROUTER_EVIDENCE_MIN_VECTOR_CONFIDENCE
+from app.embedder import semantic_embedding_ready
 from app.hybrid_retrieval import RetrievalResult, hybrid_search
 from app.knowledge_index import get_document_summaries
 from app.llm_client import generate_text
 from app.question_router import route_question
+from app.retrieval_policy import evaluate_document_evidence
 from app import trace_store
+from app.vector_store import get_all_files
 
 
 ANSWER_PROMPT = """你是一个可工作的 AI 客服助手。
@@ -174,6 +177,80 @@ def _retrieve_for_route(question: str, route: dict[str, Any]) -> RetrievalResult
     )
 
 
+def _annotate_retrieval_query(retrieval: RetrievalResult, query: str) -> RetrievalResult:
+    for candidate in retrieval.candidates:
+        candidate.metadata["retrieval_query"] = query
+    for doc in retrieval.docs:
+        doc.metadata["retrieval_query"] = query
+    for item in retrieval.debug:
+        item["query"] = query
+    return retrieval
+
+
+def _retrieve_with_document_probe(
+    question: str,
+    route: dict[str, Any],
+) -> tuple[dict[str, Any], RetrievalResult, dict[str, Any]]:
+    if route.get("needs_documents"):
+        return route, _retrieve_for_route(question, route), {
+            "status": "skipped",
+            "reason": "route_already_requires_documents",
+        }
+
+    try:
+        has_documents = bool(get_all_files())
+    except Exception as exc:
+        return route, RetrievalResult(docs=[], debug=[]), {
+            "status": "failed",
+            "reason": "knowledge_base_check_failed",
+            "error": str(exc),
+        }
+    if not has_documents:
+        return route, RetrievalResult(docs=[], debug=[]), {
+            "status": "skipped",
+            "reason": "knowledge_base_empty",
+        }
+
+    try:
+        probe = _annotate_retrieval_query(
+            hybrid_search(question, k=min(RETRIEVAL_K, 5), mode="mix"),
+            question,
+        )
+    except Exception as exc:
+        return route, RetrievalResult(docs=[], debug=[]), {
+            "status": "failed",
+            "reason": "document_evidence_probe_failed",
+            "error": str(exc),
+        }
+
+    decision = evaluate_document_evidence(
+        probe.candidates,
+        semantic_ready=semantic_embedding_ready(),
+        min_vector_confidence=ROUTER_EVIDENCE_MIN_VECTOR_CONFIDENCE,
+    )
+    probe_trace = {
+        "status": "accepted" if decision["accepted"] else "rejected",
+        "candidate_count": len(probe.candidates),
+        "semantic_embedding_ready": semantic_embedding_ready(),
+        "min_vector_confidence": ROUTER_EVIDENCE_MIN_VECTOR_CONFIDENCE,
+        **decision,
+    }
+    if not decision["accepted"]:
+        return route, RetrievalResult(docs=[], debug=probe.debug, candidates=probe.candidates), probe_trace
+
+    resolved_route = dict(route)
+    resolved_route.update(
+        {
+            "mode": "document",
+            "needs_documents": True,
+            "relevant_file_ids": [],
+            "can_use_general_knowledge": False,
+            "reason": f"retrieval_evidence_override:{decision['reason']}",
+        }
+    )
+    return resolved_route, probe, probe_trace
+
+
 def _is_enumeration_question(question: str) -> bool:
     keywords = ["哪些", "哪几个", "列表", "参数", "必选", "必填", "必须", "required", "require"]
     return any(keyword.lower() in question.lower() for keyword in keywords)
@@ -328,7 +405,7 @@ def answer_question(question: str, conversation_id: str | None = None) -> dict[s
 
     retrieval_started = perf_counter()
     try:
-        retrieval = _retrieve_for_route(question, route)
+        route, retrieval, probe_trace = _retrieve_with_document_probe(question, route)
     except Exception as exc:
         _trace_event(
             trace_id,
@@ -341,6 +418,13 @@ def answer_question(question: str, conversation_id: str | None = None) -> dict[s
         _complete_trace(trace_id, route, "", error=str(exc))
         raise
     docs = retrieval.docs
+    _trace_event(
+        trace_id,
+        "document_evidence_probe",
+        str(probe_trace.get("status", "completed")),
+        "已用文档检索证据校验路由是否应进入知识库回答。",
+        probe_trace,
+    )
     _trace_candidates(trace_id, retrieval)
     _trace_event(
         trace_id,

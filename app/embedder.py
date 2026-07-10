@@ -76,15 +76,58 @@ class HashEmbeddings(Embeddings):
         return self._embed(text)
 
 
+_hash_embedding_instance: HashEmbeddings | None = None
+
+
+def get_embedding_status() -> dict[str, str | bool]:
+    """Describe the active embedding path without loading a model."""
+    local_model = _local_bge_path()
+    fallback_allowed = os.getenv("ALLOW_HASH_EMBEDDING_FALLBACK", "true").lower() == "true"
+    if EMBEDDING_MODEL == "BAAI/bge-m3" and local_model is None:
+        backend = "hash" if fallback_allowed else "unavailable"
+        return {
+            "configured_model": EMBEDDING_MODEL,
+            "backend": backend,
+            "semantic_ready": False,
+            "local_weights_present": False,
+            "message": "BGE-M3 weights are unavailable; semantic retrieval is disabled.",
+        }
+    return {
+        "configured_model": EMBEDDING_MODEL,
+        "backend": "sentence_transformers",
+        "semantic_ready": True,
+        "local_weights_present": local_model is not None,
+        "message": "A semantic embedding model is configured for retrieval.",
+    }
+
+
+def semantic_embedding_ready() -> bool:
+    return bool(get_embedding_status()["semantic_ready"])
+
+
+def get_embedding_fingerprint() -> str:
+    status = get_embedding_status()
+    if status["backend"] == "hash":
+        return "hash-1024"
+    if status["backend"] == "unavailable":
+        return "unavailable"
+    return f"sentence-transformers:{EMBEDDING_MODEL}"
+
+
 def get_safe_embedding() -> Embeddings:
+    global _hash_embedding_instance
     if EMBEDDING_MODEL == "BAAI/bge-m3" and _local_bge_path() is None:
         if os.getenv("ALLOW_HASH_EMBEDDING_FALLBACK", "true").lower() == "true":
             print("BGE-M3 local weights unavailable; using hash embedding fallback.")
-            return HashEmbeddings()
+            if _hash_embedding_instance is None:
+                _hash_embedding_instance = HashEmbeddings()
+            return _hash_embedding_instance
     try:
         return get_embedding()
     except Exception as exc:
         if os.getenv("ALLOW_HASH_EMBEDDING_FALLBACK", "true").lower() != "true":
             raise
         print(f"BGE-M3 load failed; using hash embedding fallback: {exc}")
-        return HashEmbeddings()
+        if _hash_embedding_instance is None:
+            _hash_embedding_instance = HashEmbeddings()
+        return _hash_embedding_instance

@@ -4,7 +4,7 @@ from typing import List
 from langchain_core.documents import Document
 from langchain_chroma import Chroma
 from app.config import CHROMA_DIR
-from app.embedder import get_safe_embedding
+from app.embedder import get_embedding_fingerprint, get_embedding_status, get_safe_embedding
 
 
 _collection_name = "talkagent_knowledge"
@@ -28,9 +28,11 @@ def add_documents(documents: List[Document], file_name: str) -> str:
     将一组文档块入库。返回 file_id。
     """
     file_id = str(uuid.uuid4())
+    embedding_fingerprint = get_embedding_fingerprint()
     for doc in documents:
         doc.metadata["file_id"] = file_id
         doc.metadata["file_name"] = file_name
+        doc.metadata["embedding_fingerprint"] = embedding_fingerprint
     store = _get_store(with_embedding=True)
     store.add_documents(documents)
     return file_id
@@ -108,7 +110,11 @@ def get_documents_by_file(file_id: str) -> List[Document]:
 def get_stats() -> dict:
     """获取知识库统计信息"""
     if not _store_exists():
-        return {"total_chunks": 0, "total_files": 0}
+        return {
+            "total_chunks": 0,
+            "total_files": 0,
+            "embedding": get_index_embedding_status([]),
+        }
     store = _get_store()
     results = store.get()
     metadatas = results.get("metadatas", [])
@@ -116,6 +122,41 @@ def get_stats() -> dict:
     return {
         "total_chunks": len(results.get("ids", [])),
         "total_files": len(file_ids),
+        "embedding": get_index_embedding_status(metadatas),
+    }
+
+
+def get_index_embedding_status(metadatas: list[dict] | None = None) -> dict:
+    """Report whether the persisted vectors match the currently configured embedder."""
+    if metadatas is None:
+        if _store_exists():
+            metadatas = _get_store().get().get("metadatas", []) or []
+        else:
+            metadatas = []
+    current = get_embedding_status()
+    current_fingerprint = get_embedding_fingerprint()
+    fingerprints = sorted(
+        {
+            str(metadata.get("embedding_fingerprint") or "unknown")
+            for metadata in metadatas
+        }
+    )
+
+    if not metadatas:
+        index_state = "empty"
+    elif fingerprints == [current_fingerprint]:
+        index_state = "compatible"
+    elif fingerprints == ["unknown"]:
+        index_state = "legacy_unknown"
+    else:
+        index_state = "rebuild_required"
+
+    return {
+        **current,
+        "current_fingerprint": current_fingerprint,
+        "index_fingerprints": fingerprints,
+        "index_state": index_state,
+        "rebuild_recommended": bool(metadatas) and index_state != "compatible",
     }
 
 

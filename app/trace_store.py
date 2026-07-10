@@ -34,6 +34,15 @@ def _connect() -> sqlite3.Connection:
     return connection
 
 
+def _ensure_column(connection: sqlite3.Connection, table: str, column: str, definition: str) -> None:
+    columns = {
+        row["name"]
+        for row in connection.execute(f"PRAGMA table_info({table})").fetchall()
+    }
+    if column not in columns:
+        connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+
 def initialize() -> None:
     with _connect() as connection:
         connection.executescript(
@@ -75,6 +84,7 @@ def initialize() -> None:
                 chunk_index TEXT,
                 score REAL,
                 vector_score REAL,
+                vector_confidence REAL,
                 keyword_score REAL,
                 graph_score REAL,
                 methods TEXT NOT NULL,
@@ -90,6 +100,7 @@ def initialize() -> None:
                 ON trace_candidates(trace_id);
             """
         )
+        _ensure_column(connection, "trace_candidates", "vector_confidence", "REAL")
 
 
 def start_run(question: str, conversation_id: str | None = None) -> str:
@@ -168,6 +179,7 @@ def record_candidates(
                 str(metadata.get("chunk_index", "")),
                 metadata.get("retrieval_score"),
                 metadata.get("vector_score"),
+                metadata.get("vector_confidence"),
                 metadata.get("keyword_score"),
                 metadata.get("graph_score"),
                 _json(metadata.get("retrieval_methods", [])),
@@ -184,9 +196,9 @@ def record_candidates(
             """
             INSERT INTO trace_candidates(
                 trace_id, retrieval_query, rank, file_id, file_name, chunk_index, score,
-                vector_score, keyword_score, graph_score, methods, matched_terms, content,
+                vector_score, vector_confidence, keyword_score, graph_score, methods, matched_terms, content,
                 used_in_context
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             rows,
         )
