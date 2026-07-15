@@ -126,7 +126,7 @@ talkagent/
 
 ### Windows 应用入口
 
-双击根目录的 `TalkAgent.pyw` 即可启动应用；如果服务已运行，它会直接打开现有页面。图标文件位于 `assets/talkagent.ico`，可用于创建 Windows 桌面快捷方式。
+双击根目录的 `TalkAgent.pyw` 即可启动应用；启动时会显示进度窗口，并在服务就绪后自动打开浏览器。若启动失败，会弹出日志位置 `data/launcher/server.log`。旧的 `start_desktop_app.bat` 和 `start_desktop_app.vbs` 也会统一启动此入口。图标文件位于 `assets/talkagent.ico`，可用于创建 Windows 桌面快捷方式。
 
 1. 安装依赖：
 
